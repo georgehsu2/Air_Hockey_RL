@@ -113,18 +113,24 @@ python ppo.py
 ```
 
 訓練過程會：
-- 建立 PPO agent。
+- 建立 PPO agent，環境是 `air_hockey_env.AirHockeyEnv`（遊戲物理來自 `air_hockey_game_mouse.py`）。
 - 與 Air Hockey Gym 環境互動。
-- 收集 trajectory。
+- 收集 trajectory，並用 GAE 計算 advantage。
 - 依照 PPO loss 更新 actor-critic。
 - 週期性儲存模型。
 - 將訓練資訊寫入 TensorBoard。
+
+`ppo.py` 預設不開視窗（`AirHockeyEnv(render_mode=None)`）；想看訓練畫面時改成 `render_mode="human"`。
 
 模型預設會儲存在類似以下資料夾：
 
 ```text
 saved_models_YYYYMMDD_HHMMSS/
 ```
+
+> **2026-11 修正後需要重新訓練基礎模型。** 這次修正了：PPO 取樣和更新用了不同的動作標準差、自己得分沒有獎勵、距離獎勵沒有和上一步比較、1000 步逾時沒有作用，以及一次反彈射門在擊球前就判斷。舊模型（例如 `saved_models_20250518_151900/`）是在這些錯誤下訓練出來的。
+>
+> 另外，訓練環境的球拍最高速是 25（`air_hockey_game_mouse.py`），但 `run_model.py` 使用的 `no_rulebased_game.py` 和 DDA 使用的 `DDA_game.py` 是 50。拿新模型對戰或做 DDA 之前，請先統一這幾個檔案的 `PADDLE_MAX_SPEED`。
 
 ---
 
@@ -324,6 +330,8 @@ RENDER = False
 ```python
 render_mode="none"
 ```
+
+`air_hockey_env.AirHockeyEnv` 只要 `render_mode` 不是 `"human"` 就不開視窗；DDA 用的 `DDA_game.py` 目前仍會建立視窗，只是不繪圖。
 
 ### 4. checkpoint 格式不完全一致
 

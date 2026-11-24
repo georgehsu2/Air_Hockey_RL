@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from onlyone_model_test import AirHockeyEnv
+from air_hockey_env import AirHockeyEnv
 from pprint import pprint
 import pygame
 import sys
@@ -22,6 +22,7 @@ BATCH_SIZE = 256
 EPOCHS = 10
 TIMESTEPS_PER_UPDATE = 2048
 MAX_STEPS_PER_EPISODE = 5000  # 最大步數限制
+ACTION_STD = 0.8  # 取樣與更新共用的動作標準差
 
 # Define Actor-Critic Network
 class ActorCritic(nn.Module):
@@ -56,10 +57,6 @@ class PPOAgent:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model.to(self.device)
 
-        # 初始化 TensorBoard
-        self.writer = SummaryWriter(log_dir="runs/ppo_air_hockey")
-        self.episode_count = 0
-        
         self.gamma = GAMMA
         self.lambda_ = GAE_LAMBDA
         self.epsilon = CLIP_EPSILON
@@ -79,13 +76,14 @@ class PPOAgent:
 
     def select_action(self, state):
         state = torch.tensor(state, dtype=torch.float32).to(self.device)
-        action_logits, _ = self.model(state)
+        with torch.no_grad():
+            action_logits, _ = self.model(state)
         action_mean = torch.tanh(action_logits)
-        action_std = torch.ones_like(action_mean) * 0.8
+        action_std = torch.ones_like(action_mean) * ACTION_STD
         dist = torch.distributions.Normal(action_mean, action_std)
-        
+
+        # log_prob 用未裁切的取樣值計算；送進環境前才裁到 [-1, 1]
         action = dist.sample()
-        action = torch.clamp(action, -1, 1)
         log_prob = dist.log_prob(action).sum(axis=-1)
         entropy = dist.entropy().sum(axis=-1)
 
@@ -100,44 +98,47 @@ class PPOAgent:
         }, save_path)
         print(f"Model saved at episode {episode}")
         
-    def compute_advantages(self, rewards, values, dones):
-        advantages = []
-        gae = 0
+    def compute_advantages(self, rewards, values, next_values, dones):
+        """GAE。done 的那一步不 bootstrap 下一狀態，也不把 advantage 傳回前一個 episode。"""
+        advantages = np.zeros(len(rewards), dtype=np.float32)
+        gae = 0.0
         for i in reversed(range(len(rewards))):
-            delta = rewards[i] + GAMMA * values[i + 1] * (1 - dones[i]) - values[i]
-            gae = delta + GAMMA * GAE_LAMBDA * (1 - dones[i]) * gae
-            advantages.insert(0, gae)
-        return np.array(advantages)
+            mask = 1.0 - float(dones[i])
+            delta = rewards[i] + self.gamma * next_values[i] * mask - values[i]
+            gae = delta + self.gamma * self.lambda_ * mask * gae
+            advantages[i] = gae
+        return advantages
 
     def update(self, trajectories):
         states = np.array([t[0] for t in trajectories])
         actions = np.array([t[1] for t in trajectories])
-        rewards = np.array([t[2] for t in trajectories])
+        rewards = np.array([t[2] for t in trajectories], dtype=np.float32)
         next_states = np.array([t[3] for t in trajectories])
-        dones = np.array([t[4] for t in trajectories])
+        dones = np.array([t[4] for t in trajectories], dtype=np.float32)
         old_log_probs = np.array([t[5] for t in trajectories])
 
         states = torch.tensor(states, dtype=torch.float32).to(self.device)
         actions = torch.tensor(actions, dtype=torch.float32).to(self.device)
-        rewards = torch.tensor(rewards, dtype=torch.float32).to(self.device)
         next_states = torch.tensor(next_states, dtype=torch.float32).to(self.device)
-        dones = torch.tensor(dones, dtype=torch.float32).to(self.device)
         old_log_probs = torch.tensor(old_log_probs, dtype=torch.float32).to(self.device)
 
         with torch.no_grad():
             _, current_values = self.model(states)
             _, next_values = self.model(next_states)
-        current_values = current_values.squeeze()
-        next_values = next_values.squeeze()
+        current_values = current_values.squeeze(-1)
+        next_values = next_values.squeeze(-1)
 
-        returns = rewards + self.gamma * (1 - dones) * next_values
-        advantages = returns - current_values
+        advantages = self.compute_advantages(
+            rewards, current_values.cpu().numpy(), next_values.cpu().numpy(), dones)
+        advantages = torch.tensor(advantages, dtype=torch.float32).to(self.device)
+        returns = advantages + current_values
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
         for _ in range(self.epochs):
             new_action_logits, new_values = self.model(states)
             new_action_mean = torch.tanh(new_action_logits)
-            dist = torch.distributions.Normal(new_action_mean, torch.ones_like(new_action_mean) * 0.1)
+            # 必須和 select_action 用同一個標準差，ratio 才是新舊策略的機率比
+            dist = torch.distributions.Normal(new_action_mean, torch.ones_like(new_action_mean) * ACTION_STD)
             new_log_probs = dist.log_prob(actions).sum(axis=-1)
 
             ratios = torch.exp(new_log_probs - old_log_probs)
@@ -145,7 +146,8 @@ class PPOAgent:
             surr2 = torch.clamp(ratios, 1 - self.epsilon, 1 + self.epsilon) * advantages
             policy_loss = -torch.min(surr1, surr2).mean()
 
-            value_loss = self.value_coef * (returns - new_values.squeeze()).pow(2).mean()
+            value_loss = self.value_coef * (returns - new_values.squeeze(-1)).pow(2).mean()
+            # ACTION_STD 固定時 entropy 是常數，這一項不影響梯度，只用來記錄
             entropy_loss = -self.entropy_coef * dist.entropy().mean()
 
             loss = policy_loss + value_loss + entropy_loss
@@ -187,10 +189,9 @@ class PPOAgent:
                         return
 
                 # 獲取動作
-                state_tensor = torch.FloatTensor(state).to(self.device)
                 action, log_prob, _ = self.select_action(state)
                 # print(action)
-                next_state, reward, done, _ = self.env.step(action)
+                next_state, reward, done, _ = self.env.step(np.clip(action, -1.0, 1.0))
                 # time.sleep(1/20)
                 # 檢查是否超過最大步數
                 if episode_steps >= MAX_STEPS_PER_EPISODE:
@@ -210,8 +211,6 @@ class PPOAgent:
 
                 state = next_state
 
-                pygame.display.flip()
-
                 if done:
                     state = self.env.reset()
                     episode_rewards.append(episode_reward)
@@ -220,7 +219,7 @@ class PPOAgent:
                     self.writer.add_scalar('Reward/episode', episode_reward, self.episode_count)
                     print(f"Episode {self.episode_count} finished. Steps: {episode_steps}, Reward: {episode_reward}")
 
-                    # 每30個episode儲存模型
+                    # 每10個episode儲存模型
                     if self.episode_count % 10 == 0:
                         self.save_model(self.episode_count)
 

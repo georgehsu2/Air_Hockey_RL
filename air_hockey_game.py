@@ -118,7 +118,7 @@ class AirHockeyGame:
         if self.ball_pos[1] + BALL_RADIUS >= HEIGHT:  # Ball reaches bottom
             if (WIDTH - GOAL_WIDTH) // 2 <= self.ball_pos[0] <= (WIDTH + GOAL_WIDTH) // 2:
                 self.player2_score += 1
-                self.reset_ball(scoring_player="player1")  # Player 2 scores
+                self.reset_ball(scoring_player="player2")  # Player 2 scores
             else:
                 self.ball_vel[1] = -self.ball_vel[1]
                 self.ball_pos[1] = HEIGHT - BALL_RADIUS

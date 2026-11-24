@@ -47,7 +47,7 @@ class ActorCritic(nn.Module):
 # Load a trained model (unchanged)
 def load_model(path, input_dim, output_dim):
     model = ActorCritic(input_dim, output_dim)
-    checkpoint = torch.load(path)
+    checkpoint = torch.load(path, map_location="cpu")
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
     return model
@@ -366,9 +366,6 @@ class AirHockeyGame:
             overlap = PADDLE_RADIUS + BALL_RADIUS - dist
             if overlap > 0:
                 self.last_paddle_hit = "player1" if idx == 0 else "player2"
-                # if agent’s paddle (player2) hits & predicts one-bounce goal → flag
-                if idx == 1 and self._will_score_with_one_bounce():
-                    self.just_one_bounce_hit = True
                 if dist < 1e-6:
                     nx, ny = 1.0, 0.0
                 else:
@@ -379,6 +376,9 @@ class AirHockeyGame:
                 self.ball_vel[1] = ny * (bs + ps)
                 self.ball_pos[0] += nx * overlap
                 self.ball_pos[1] += ny * overlap
+                # 擊球後才判斷：agent（player2）擊出去的球能否直接或經一次側牆反彈進下方（對手）球門
+                if idx == 1 and self.ball_vel[1] > 0 and self._will_score_with_one_bounce():
+                    self.just_one_bounce_hit = True
 
         # wall bounce
         if self.ball_pos[0] - BALL_RADIUS < 0:

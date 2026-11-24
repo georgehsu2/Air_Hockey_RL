@@ -27,7 +27,7 @@ class ActorCritic(nn.Module):
 
 def load_model(model_path, input_dim, output_dim):
     model = ActorCritic(input_dim, output_dim)
-    checkpoint = torch.load(model_path)
+    checkpoint = torch.load(model_path, map_location="cpu")
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
     return model

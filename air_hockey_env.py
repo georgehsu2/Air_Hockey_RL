@@ -10,10 +10,7 @@ class AirHockeyEnv(gym.Env):
         do_render = (render_mode == "human")
         self.game = AirHockeyGame(render=do_render)
         self.render_mode = render_mode
-        
-        # 初始化遊戲實例
-        self.game = AirHockeyGame()
-        
+
         # 定義觀測空間 (改進：更規範化的狀態表示)
         self.observation_space = spaces.Box(
             low=-1.0, 
@@ -88,6 +85,8 @@ class AirHockeyEnv(gym.Env):
         """综合奖励计算（修复数组操作）"""
         rewards = 0.0
 
+        if player1_scored:
+            rewards += self.reward_weights['goal']
         if player2_scored:
             rewards -= self.reward_weights['goal']
             
@@ -103,7 +102,9 @@ class AirHockeyEnv(gym.Env):
                     rewards += 0.1
                 else:
                     rewards -= 0.1
- 
+        # 每一步都更新，下一步才是和「上一步」比較
+        self.prev_ball_distance = curr_dist
+
         # —— 新增：只要下方拍子碰到视窗边缘就给 negative reward —— 
         px, py = self.game.player1_pos
         R = self.game.PADDLE_RADIUS
@@ -111,7 +112,6 @@ class AirHockeyEnv(gym.Env):
         # 左、右、上（中线）、下 边缘判定
         if (px <= R) or (px >= W - R) or (py <= H//2 + R) or (py >= H - R):
             rewards += self.reward_weights['edge_penalty']
-            print("edge penalty")
 
         return rewards
 
@@ -167,7 +167,7 @@ class AirHockeyEnv(gym.Env):
             self.game.just_one_bounce_hit = False
         
         # 终止条件
-        # self.episode_step += 1
+        self.episode_step += 1
         done = p1_scored or p2_scored or (self.episode_step >= 1000)
         if done and not (p1_scored or p2_scored) and self.episode_step >= 1000:
             reward -= 10

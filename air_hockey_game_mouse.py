@@ -348,9 +348,6 @@ class AirHockeyGame:
             overlap = PADDLE_RADIUS + BALL_RADIUS - dist
             if overlap > 0:
                 self.last_paddle_hit = 'player1' if idx == 0 else 'player2'
-                if idx == 0 and self._will_score_with_one_bounce():
-                    self.just_one_bounce_hit = True
-                    print("One bounce hit!")
                 # print(f"Last paddle hit: {self.last_paddle_hit}")
                 # 避免除以零
                 if dist < 1e-6:
@@ -364,6 +361,10 @@ class AirHockeyGame:
                 self.ball_vel[1] = ny * (ball_speed + paddle_speed)
                 self.ball_pos[0] += nx * overlap
                 self.ball_pos[1] += ny * overlap
+                # 擊球後才判斷：用擊出去的球速，看能否直接或經一次側牆反彈進上方（對手）球門
+                if idx == 0 and self.ball_vel[1] < 0 and self._will_score_with_one_bounce():
+                    self.just_one_bounce_hit = True
+                    print("One bounce hit!")
         # 检查与角落障碍物的碰撞
         for obstacle in CORNER_OBSTACLES:
             dist = math.hypot(self.ball_pos[0] - obstacle[0], self.ball_pos[1] - obstacle[1])
